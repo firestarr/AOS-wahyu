@@ -9,6 +9,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use App\Models\Item;
 use App\Models\UnitOfMeasure;
 use App\Models\Sales\DeliveryLine;
+use App\models\Sales\Customer;
+use App\models\Sales\SalesOrder;
+use App\Models\Tax\Tax;
+use App\Models\Tax\TaxGroup;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class SOLine extends Model
 {

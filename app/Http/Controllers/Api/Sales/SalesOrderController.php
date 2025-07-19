@@ -87,7 +87,7 @@ class SalesOrderController extends Controller
                     $q->where('so_number', 'like', "%{$search}%")
                         ->orWhere('po_number_customer', 'like', "%{$search}%")
                         ->orWhereHas('customer', function ($q2) use ($search) {
-                            $q2->where('customer_name', 'like', "%{$search}%") // ⭐ FIXED FIELD NAME
+                            $q2->where('name', 'like', "%{$search}%") // ⭐ FIXED FIELD NAME
                                 ->orWhere('customer_code', 'like', "%{$search}%");
                         });
                 });
@@ -1331,7 +1331,7 @@ class SalesOrderController extends Controller
                 $orderSheet->setCellValue('B' . $row, $order->po_number_customer ?? '');
                 $orderSheet->setCellValue('C' . $row, $order->so_date->format('Y-m-d'));
                 $orderSheet->setCellValue('D' . $row, $order->customer->customer_code ?? '');
-                $orderSheet->setCellValue('E' . $row, $order->customer->customer_name ?? ''); // ⭐ FIXED FIELD NAME
+                $orderSheet->setCellValue('E' . $row, $order->customer->name ?? ''); // ⭐ FIXED FIELD NAME
                 $orderSheet->setCellValue('F' . $row, $order->payment_terms);
                 $orderSheet->setCellValue('G' . $row, $order->delivery_terms);
                 $orderSheet->setCellValue('H' . $row, $order->expected_delivery ? $order->expected_delivery->format('Y-m-d') : '');

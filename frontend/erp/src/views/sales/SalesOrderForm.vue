@@ -110,15 +110,18 @@
                                     <div
                                         v-for="customer in getFilteredCustomers(customerSearch)"
                                         :key="customer.customer_id"
-                                        @mousedown="selectCustomer(customer)"
                                         class="dropdown-item"
+                                        @click="selectCustomer(customer)"
                                     >
                                         <div class="customer-info">
                                             <div class="customer-name">{{ customer.name }}</div>
-                                            <div class="customer-code" v-if="customer.customer_code">{{ customer.customer_code }}</div>
+                                            <small class="customer-code">{{ customer.customer_code }}</small>
                                         </div>
                                     </div>
-                                    <div v-if="getFilteredCustomers(customerSearch).length === 0" class="dropdown-item text-muted">
+                                    <div
+                                        v-if="getFilteredCustomers(customerSearch).length === 0"
+                                        class="dropdown-item text-muted"
+                                    >
                                         No customers found
                                     </div>
                                 </div>
@@ -126,21 +129,19 @@
                         </div>
 
                         <div class="form-group">
-                            <label for="currency_code">Currency Code*</label>
+                            <label for="currency_code">Currency*</label>
                             <select
                                 id="currency_code"
                                 v-model="form.currency_code"
                                 required
                             >
+                                <option value="">Select Currency</option>
                                 <option value="IDR">IDR - Indonesian Rupiah</option>
                                 <option value="USD">USD - US Dollar</option>
                                 <option value="EUR">EUR - Euro</option>
                                 <option value="SGD">SGD - Singapore Dollar</option>
-                                <option value="JPY">JPY - Japanese Yen</option>
+                                <option value="MYR">MYR - Malaysian Ringgit</option>
                             </select>
-                            <small class="text-muted">
-                                Currency used for the transaction
-                            </small>
                         </div>
                     </div>
 
@@ -151,7 +152,7 @@
                                 type="text"
                                 id="payment_terms"
                                 v-model="form.payment_terms"
-                                placeholder="Example: 30 days after delivery"
+                                placeholder="e.g., Net 30 days"
                             />
                         </div>
 
@@ -161,50 +162,37 @@
                                 type="text"
                                 id="delivery_terms"
                                 v-model="form.delivery_terms"
-                                placeholder="Example: Free to buyer's warehouse"
+                                placeholder="e.g., FOB, CIF, etc."
                             />
                         </div>
                     </div>
 
-                    <div class="form-row" v-if="isEditMode">
-                        <div class="form-group">
-                            <label for="status">Status*</label>
-                            <select id="status" v-model="form.status" required>
-                                <option value="Draft">Draft</option>
-                                <option value="Confirmed">Confirmed</option>
-                                <option value="Processing">Processing</option>
-                                <option value="Shipped">Shipped</option>
-                                <option value="Delivered">Delivered</option>
-                                <option value="Invoiced" disabled>
-                                    Invoiced
-                                </option>
-                                <option value="Closed" disabled>Closed</option>
-                            </select>
-                            <small
-                                v-if="
-                                    form.status === 'Invoiced' ||
-                                    form.status === 'Closed'
-                                "
-                                class="text-muted"
-                            >
-                               Status cannot be changed because it is already
-                                {{
-                                    form.status === "Invoiced"
-                                        ? "invoiced"
-                                        : "closed"
-                                }}
-                            </small>
-                        </div>
+                    <div class="form-group">
+                        <label for="status">Status*</label>
+                        <select
+                            id="status"
+                            v-model="form.status"
+                            required
+                        >
+                            <option value="draft">Draft</option>
+                            <option value="confirmed">Confirmed</option>
+                            <option value="processing">Processing</option>
+                            <option value="shipped">Shipped</option>
+                            <option value="delivered">Delivered</option>
+                            <option value="invoiced">Invoiced</option>
+                            <option value="closed">Closed</option>
+                        </select>
                     </div>
                 </div>
             </div>
 
+            <!-- Order Items -->
             <div class="form-card">
                 <div class="card-header">
-                    <h2>Item Order</h2>
+                    <h2>Order Items</h2>
                     <button
                         type="button"
-                        class="btn btn-sm btn-primary"
+                        class="btn btn-primary"
                         @click="addLine"
                     >
                         <i class="fas fa-plus"></i> Add Item
@@ -212,28 +200,27 @@
                 </div>
                 <div class="card-body">
                     <div v-if="form.lines.length === 0" class="empty-lines">
-                        <p>
-                            No items added yet. Click "Add Item" to add an item.
-                        </p>
+                        <p>No items added yet. Click "Add Item" to start.</p>
                     </div>
-
+                    
                     <div v-else class="order-lines">
-                        <div class="order-currency-info" v-if="form.currency_code !== 'IDR'">
+                        <div v-if="form.currency_code" class="order-currency-info">
                             <i class="fas fa-info-circle"></i>
-                            All prices in <strong>{{ form.currency_code }}</strong>
+                            All prices are displayed in {{ form.currency_code }}
                         </div>
 
                         <div class="line-headers">
-                            <div class="line-header">Item</div>
-                            <div class="line-header">Unit Price</div>
-                            <div class="line-header">Quantity</div>
-                            <div class="line-header">UOM</div>
-                            <div class="line-header">Delivery Date</div>
-                            <div class="line-header">Discount</div>
-                            <div class="line-header">Tax</div>
-                            <div class="line-header">Subtotal</div>
-                            <div class="line-header">Total</div>
-                            <div class="line-header"></div>
+                            <div>Item</div>
+                            <div>Unit Price</div>
+                            <div>Quantity</div>
+                            <div>UOM</div>
+                            <div>Delivery Date</div>
+                            <div>Discount</div>
+                            <div>Tax Rate (%)</div>
+                            <div>Tax Amount</div>
+                            <div>Subtotal</div>
+                            <div>Total</div>
+                            <div>Action</div>
                         </div>
 
                         <div
@@ -304,8 +291,7 @@
                                     v-model.number="line.unit_price"
                                     min="0"
                                     step="0.01"
-                                    required
-                                    @input="calculateLineTotals(index)"
+                                    @input="calculateLineTaxes(index)"
                                     placeholder="0.00"
                                 />
                             </div>
@@ -314,23 +300,22 @@
                                 <input
                                     type="number"
                                     v-model.number="line.quantity"
-                                    min="0"
-                                    step="0.01"
-                                    required
-                                    @input="calculateLineTotals(index)"
-                                    placeholder="0"
+                                    min="0.0001"
+                                    step="0.0001"
+                                    @input="calculateLineTaxes(index)"
+                                    placeholder="1"
                                 />
                             </div>
 
                             <div class="line-item" data-label="UOM">
-                                <select v-model="line.uom_id" required>
-                                    <option value="">-- UOM --</option>
+                                <select v-model="line.uom_id">
+                                    <option value="">Select UOM</option>
                                     <option
                                         v-for="uom in unitOfMeasures"
                                         :key="uom.uom_id"
                                         :value="uom.uom_id"
                                     >
-                                        {{ uom.symbol }}
+                                        {{ uom.name }}
                                     </option>
                                 </select>
                             </div>
@@ -353,20 +338,29 @@
                                     v-model.number="line.discount"
                                     min="0"
                                     step="0.01"
-                                    @input="calculateLineTotals(index)"
+                                    @input="calculateLineTaxes(index)"
                                     placeholder="0.00"
                                 />
                             </div>
 
-                            <div class="line-item" data-label="Tax">
-                                <input
-                                    type="number"
-                                    v-model.number="line.tax"
-                                    min="0"
-                                    step="0.01"
-                                    @input="calculateLineTotals(index)"
-                                    placeholder="0.00"
-                                />
+                            <div class="line-item" data-label="Tax Rate">
+                                <span class="tax-rate-display">
+                                    {{ line.tax_rate ? line.tax_rate.toFixed(2) : '0.00' }}%
+                                </span>
+                                <small class="text-muted d-block" v-if="line.applied_taxes && line.applied_taxes.length > 0">
+                                    Auto-calculated
+                                </small>
+                            </div>
+
+                            <div class="line-item" data-label="Tax Amount">
+                                <span class="tax-amount-display">
+                                    {{ formatCurrency(line.tax || 0) }}
+                                </span>
+                                <div v-if="line.applied_taxes && line.applied_taxes.length > 0" class="tax-breakdown">
+                                    <small v-for="tax in line.applied_taxes" :key="tax.tax_id" class="tax-detail">
+                                        {{ tax.tax_name }}: {{ tax.tax_rate }}%
+                                    </small>
+                                </div>
                             </div>
 
                             <div
@@ -389,6 +383,17 @@
                                 >
                                     <i class="fas fa-trash"></i>
                                 </button>
+                            </div>
+                        </div>
+
+                        <!-- Tax Summary Section -->
+                        <div v-if="taxSummary && taxSummary.length > 0" class="tax-summary-section">
+                            <h4>Tax Summary</h4>
+                            <div class="tax-summary-grid">
+                                <div v-for="taxGroup in taxSummary" :key="taxGroup.tax_name" class="tax-group">
+                                    <span class="tax-name">{{ taxGroup.tax_name }} ({{ taxGroup.tax_rate }}%)</span>
+                                    <span class="tax-amount">{{ formatCurrency(taxGroup.total_amount) }}</span>
+                                </div>
                             </div>
                         </div>
 
@@ -442,329 +447,224 @@ export default {
             return isNaN(parsed) ? 0 : parsed;
         };
 
-        // Form data
+        // Reactive state
         const form = ref({
             so_number: "",
             po_number_customer: "",
             so_date: new Date().toISOString().substr(0, 10),
             customer_id: "",
-            quotation_id: "",
             payment_terms: "",
             delivery_terms: "",
             expected_delivery: "",
+            status: "draft",
             currency_code: "IDR",
-            status: "Draft",
             lines: [],
         });
 
-        // Reference data
         const customers = ref([]);
         const items = ref([]);
         const unitOfMeasures = ref([]);
-        const selectedCustomer = ref(null);
-
-        // Customer search functionality
-        const customerSearch = ref('');
-        const showCustomerDropdown = ref(false);
-
-        // UI state
         const isLoading = ref(false);
         const isSubmitting = ref(false);
         const error = ref("");
         const nextSoNumber = ref('');
+        const taxSummary = ref([]);
 
-        // Computed property for sellable items with debug logging
+        // Customer dropdown state
+        const selectedCustomer = ref(null);
+        const customerSearch = ref("");
+        const showCustomerDropdown = ref(false);
+
+        // Computed
+        const isEditMode = computed(() => !!route.params.id);
         const sellableItems = computed(() => {
-            const sellable = items.value.filter(item => item.is_sellable === true || item.is_sellable === 1);
-            console.log('🔍 Sellable items computed:', sellable.length, 'out of', items.value.length);
-            return sellable;
-        });
-
-        // Check if we're in edit mode
-        const isEditMode = computed(() => {
-            return route.params.id !== undefined;
-        });
-
-        // Load next sales order number for preview
-        const loadNextSalesOrderNumber = async () => {
-            if (!isEditMode.value) {
-                try {
-                    const response = await axios.get('/orders/next-number');
-                    nextSoNumber.value = response.data.next_so_number;
-                } catch (error) {
-                    console.error('Error loading next sales order number:', error);
-                    nextSoNumber.value = 'SO-' + new Date().getFullYear().toString().substr(-2) + '-000001';
-                }
-            }
-        };
-
-        // FIXED: Load reference data with enhanced logging
-        const loadReferenceData = async () => {
-            try {
-                console.log('🔄 Loading reference data...');
-
-                // Load customers
-                const customersResponse = await axios.get("/customers");
-                customers.value = customersResponse.data.data || [];
-                console.log('✅ Customers loaded:', customers.value.length);
-
-                // Load items
-                const itemsResponse = await axios.get("/items");
-                items.value = itemsResponse.data.data || [];
-                console.log('✅ Items loaded:', items.value.length);
-
-                // Debug: show sample items
-                if (items.value.length > 0) {
-                    console.log('📦 Sample item:', items.value[0]);
-                    const sellableCount = items.value.filter(item => item.is_sellable).length;
-                    console.log('🏷️ Sellable items:', sellableCount);
-                }
-
-                // Load unit of measures
-                const uomResponse = await axios.get("/unit-of-measures");
-                unitOfMeasures.value = uomResponse.data.data || [];
-                console.log('✅ UOMs loaded:', unitOfMeasures.value.length);
-
-            } catch (err) {
-                console.error("❌ Error loading reference data:", err);
-                error.value = "Error loading reference data: " + err.message;
-            }
-        };
-
-        // Helper function to convert snake_case keys to camelCase recursively
-        const toCamelCase = (obj) => {
-            if (Array.isArray(obj)) {
-                return obj.map(v => toCamelCase(v));
-            } else if (obj !== null && obj.constructor === Object) {
-                return Object.keys(obj).reduce((result, key) => {
-                    const camelKey = key.replace(/_([a-z])/g, g => g[1].toUpperCase());
-                    result[camelKey] = toCamelCase(obj[key]);
-                    return result;
-                }, {});
-            }
-            return obj;
-        };
-
-        // Load order data if in edit mode
-        const loadOrder = async () => {
-            if (!isEditMode.value) {
-                await loadNextSalesOrderNumber();
-                return;
-            }
-
-            isLoading.value = true;
-            error.value = "";
-
-            try {
-                const response = await axios.get(`/orders/${route.params.id}`);
-                let order = response.data.data;
-
-                // Convert order keys to camelCase
-                order = toCamelCase(order);
-
-                // Set form data
-                form.value = {
-                    so_id: order.soId,
-                    so_number: order.soNumber,
-                    po_number_customer: order.poNumberCustomer || "",
-                    so_date: order.soDate.substr(0, 10),
-                    customer_id: order.customerId,
-                    quotation_id: order.quotationId || "",
-                    payment_terms: order.paymentTerms || "",
-                    delivery_terms: order.deliveryTerms || "",
-                    expected_delivery: order.expectedDelivery
-                        ? order.expectedDelivery.substr(0, 10)
-                        : "",
-                    currency_code: order.currencyCode || "IDR",
-                    status: order.status,
-                    lines: [],
-                };
-
-                // Set line items dengan validasi
-                if (order.salesOrderLines && order.salesOrderLines.length > 0) {
-                    form.value.lines = order.salesOrderLines.map((line) => {
-                        const selectedItem = items.value.find(i => i.item_id == line.itemId);
-
-                        return {
-                            line_id: line.lineId,
-                            item_id: line.itemId,
-                            item_code: selectedItem ? selectedItem.item_code : '',
-                            itemSearch: selectedItem ? `${selectedItem.item_code} - ${selectedItem.name}` : '',
-                            showDropdown: false,
-                            unit_price: safeParseFloat(line.unitPrice),
-                            quantity: safeParseFloat(line.quantity) || 1,
-                            uom_id: line.uomId,
-                            delivery_date: line.deliveryDate ? line.deliveryDate.substr(0, 10) : '',
-                            discount: safeParseFloat(line.discount),
-                            tax: safeParseFloat(line.tax),
-                            subtotal: safeParseFloat(line.subtotal),
-                            total: safeParseFloat(line.total),
-                        };
-                    });
-
-                    // Recalculate all line totals
-                    form.value.lines.forEach((_, index) => {
-                        calculateLineTotals(index);
-                    });
-                }
-
-                // Find selected customer and set search field
-                if (form.value.customer_id) {
-                    selectedCustomer.value = customers.value.find(
-                        c => c.customer_id === form.value.customer_id
-                    );
-                    if (selectedCustomer.value) {
-                        customerSearch.value = selectedCustomer.value.name;
-                    }
-                }
-            } catch (err) {
-                console.error("Error loading order:", err);
-                error.value = "Error loading order.";
-            } finally {
-                isLoading.value = false;
-            }
-        };
-
-        // Method to filter customers based on search input
-        const getFilteredCustomers = (searchInput) => {
-            if (!searchInput) {
-                return customers.value;
-            }
-            return customers.value.filter(customer =>
-                customer.name.toLowerCase().includes(searchInput.toLowerCase()) ||
-                (customer.customer_code && customer.customer_code.toLowerCase().includes(searchInput.toLowerCase()))
+            return items.value.filter(item => item.is_sellable
             );
+        });
+
+        // Customer dropdown methods
+        const getFilteredCustomers = (searchTerm) => {
+            if (!searchTerm) return customers.value.slice(0, 10);
+            
+            const filtered = customers.value.filter(customer => 
+                customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                customer.customer_code.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+            
+            return filtered.slice(0, 10);
         };
 
-        // Method to select a customer from the dropdown
         const selectCustomer = (customer) => {
+            selectedCustomer.value = customer;
             form.value.customer_id = customer.customer_id;
             customerSearch.value = customer.name;
             showCustomerDropdown.value = false;
-            selectedCustomer.value = customer;
-
-            // If customer has preferred currency, set it as the order currency
+            
+            // Set preferred currency if available
             if (customer.preferred_currency) {
                 form.value.currency_code = customer.preferred_currency;
             }
+            
+            console.log('Selected customer:', customer.name);
         };
 
-        // FIXED: Enhanced item filtering with better logic
-        const getFilteredItems = (searchInput) => {
-            const searchTerm = (searchInput || '').trim();
-
-            if (!searchTerm) {
-                // Return first 20 sellable items when no search term
-                return sellableItems.value.slice(0, 20);
-            }
-
-            const searchLower = searchTerm.toLowerCase();
-            const filtered = sellableItems.value.filter(item => {
-                const matchCode = item.item_code && item.item_code.toLowerCase().includes(searchLower);
-                const matchName = item.name && item.name.toLowerCase().includes(searchLower);
-                const matchDesc = item.description && item.description.toLowerCase().includes(searchLower);
-
-                return matchCode || matchName || matchDesc;
-            });
-
+        // Item dropdown methods
+        const getFilteredItems = (searchTerm) => {
+            if (!searchTerm) return sellableItems.value.slice(0, 10);
+            
+            const filtered = sellableItems.value.filter(item => 
+                item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                item.item_code.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+            
             console.log(`🔍 Search "${searchTerm}" found ${filtered.length} items`);
-            return filtered.slice(0, 50); // Limit to 50 results for performance
+            return filtered.slice(0, 50);
         };
 
-        // NEW: Show item dropdown with proper state management
         const showItemDropdown = (index) => {
             console.log('👆 Show dropdown for line', index);
 
-            // Hide all other dropdowns first
             form.value.lines.forEach((line, i) => {
                 if (i !== index) {
                     line.showDropdown = false;
                 }
             });
 
-            // Show current dropdown
             if (form.value.lines[index]) {
                 form.value.lines[index].showDropdown = true;
                 console.log('📋 Available sellable items:', sellableItems.value.length);
             }
         };
 
-        // NEW: Handle item search input
         const handleItemSearch = (index, event) => {
             const searchTerm = event.target.value;
             console.log('🔍 Search term changed:', searchTerm, 'for line', index);
 
-            // Always show dropdown when typing
             if (form.value.lines[index]) {
                 form.value.lines[index].showDropdown = true;
             }
         };
 
-        // FIXED: Enhanced item selection with better price handling
         const selectItem = async (item, lineIndex) => {
             console.log('✅ Selecting item:', item.item_code, 'for line', lineIndex);
 
             const line = form.value.lines[lineIndex];
 
-            // Set item data
             line.item_id = item.item_id;
             line.item_code = item.item_code;
             line.itemSearch = `${item.item_code} - ${item.name}`;
             line.showDropdown = false;
 
-            // Set UOM automatically if available
             if (item.uom_id) {
                 line.uom_id = item.uom_id;
                 console.log('🏷️ UOM set from item.uom_id:', item.uom_id);
             }
 
-            // Set default delivery date
-            if (!line.delivery_date) {
-                if (form.value.expected_delivery) {
-                    line.delivery_date = form.value.expected_delivery;
-                } else {
-                    const soDate = new Date(form.value.so_date);
-                    soDate.setDate(soDate.getDate() + 7);
-                    line.delivery_date = soDate.toISOString().substr(0, 10);
-                }
+            let defaultDeliveryDate = '';
+            if (form.value.expected_delivery) {
+                defaultDeliveryDate = form.value.expected_delivery;
+            } else {
+                const soDate = new Date(form.value.so_date);
+                soDate.setDate(soDate.getDate() + 7);
+                defaultDeliveryDate = soDate.toISOString().substr(0, 10);
+            }
+            line.delivery_date = defaultDeliveryDate;
+
+            // Set unit price with fallback
+            const unitPrice = item.sale_price || item.selling_price || item.unit_price || 0;
+            line.unit_price = unitPrice;
+            
+            if (!line.quantity || line.quantity <= 0) {
+                line.quantity = 1;
             }
 
-            // Get price information
-            try {
-                if (form.value.customer_id) {
-                    // Try to get best price from API
-                    const response = await axios.get(`/items/${item.item_id}/best-sale-price`, {
-                        params: {
-                            customer_id: form.value.customer_id,
-                            quantity: safeParseFloat(line.quantity) || 1,
-                            currency_code: form.value.currency_code
-                        }
-                    });
-
-                    if (response.data && response.data.price) {
-                        line.unit_price = safeParseFloat(response.data.price);
-                        console.log('💰 Price from API:', line.unit_price);
-                    } else {
-                        line.unit_price = safeParseFloat(item.sale_price);
-                        console.log('💰 Price from item.sale_price:', line.unit_price);
-                    }
-                } else {
-                    // No customer selected, use item sale price
-                    line.unit_price = safeParseFloat(item.sale_price);
-                    console.log('💰 Price from item (no customer):', line.unit_price);
-                }
-            } catch (err) {
-                console.error("❌ Error fetching item price:", err);
-                line.unit_price = safeParseFloat(item.sale_price);
-                console.log('💰 Fallback price:', line.unit_price);
-            }
-
-            // Always recalculate after setting price
-            calculateLineTotals(lineIndex);
-            console.log('🧮 Line totals calculated');
+            // Calculate taxes automatically
+            await calculateLineTaxes(lineIndex);
         };
 
-        // Line item operations
+        // Tax calculation function - NEW
+        const calculateLineTaxes = async (index) => {
+            const line = form.value.lines[index];
+            
+            if (!line.item_id || !form.value.customer_id || !line.unit_price || !line.quantity) {
+                // Reset tax calculations if required data is missing
+                line.tax = 0;
+                line.tax_rate = 0;
+                line.applied_taxes = [];
+                calculateLineTotals(index);
+                return;
+            }
+
+            try {
+                // Call backend API to get applicable taxes
+                const response = await axios.get('/sales/orders/applicable-taxes', {
+                    params: {
+                        item_id: line.item_id,
+                        customer_id: form.value.customer_id
+                    }
+                });
+
+                if (response.data.status === 'success') {
+                    const taxes = response.data.data.applicable_taxes;
+                    
+                    // Calculate tax amounts using the same logic as backend
+                    const unitPrice = safeParseFloat(line.unit_price);
+                    const quantity = safeParseFloat(line.quantity);
+                    const discount = safeParseFloat(line.discount);
+                    
+                    const subtotal = unitPrice * quantity;
+                    const subtotalAfterDiscount = subtotal - discount;
+                    
+                    let totalTaxAmount = 0;
+                    let baseAmount = subtotalAfterDiscount;
+                    const taxDetails = [];
+
+                    // Sort taxes by sequence
+                    const sortedTaxes = taxes.sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+
+                    for (const tax of sortedTaxes) {
+                        const taxRate = tax.rate || 0;
+                        let taxAmount = 0;
+
+                        if (tax.computation_type === 'percentage') {
+                            taxAmount = (baseAmount * taxRate) / 100;
+                        } else if (tax.computation_type === 'fixed') {
+                            taxAmount = taxRate;
+                        }
+
+                        taxDetails.push({
+                            tax_id: tax.tax_id,
+                            tax_name: tax.name,
+                            tax_rate: taxRate,
+                            tax_amount: taxAmount,
+                            included_in_price: tax.included_in_price || false
+                        });
+
+                        totalTaxAmount += taxAmount;
+
+                        // If tax is not included in price, add it to base for next tax calculation
+                        if (!tax.included_in_price) {
+                            baseAmount += taxAmount;
+                        }
+                    }
+
+                    // Update line with calculated tax data
+                    line.tax = totalTaxAmount;
+                    line.tax_rate = subtotalAfterDiscount > 0 ? (totalTaxAmount / subtotalAfterDiscount) * 100 : 0;
+                    line.applied_taxes = taxDetails;
+                }
+            } catch (error) {
+                console.error('Error calculating taxes:', error);
+                // Fallback to manual tax calculation
+                line.tax = safeParseFloat(line.tax) || 0;
+                line.tax_rate = 0;
+                line.applied_taxes = [];
+            }
+
+            calculateLineTotals(index);
+        };
+
+        // Line operations
         const addLine = () => {
             let defaultDeliveryDate = '';
             if (form.value.expected_delivery) {
@@ -781,11 +681,13 @@ export default {
                 itemSearch: "",
                 showDropdown: false,
                 unit_price: 0,
-                quantity: 0,
+                quantity: 1,
                 uom_id: "",
                 delivery_date: defaultDeliveryDate,
                 discount: 0,
                 tax: 0,
+                tax_rate: 0,
+                applied_taxes: [],
                 subtotal: 0,
                 total: 0,
             });
@@ -801,19 +703,14 @@ export default {
         const calculateLineTotals = (index) => {
             const line = form.value.lines[index];
 
-            // Pastikan semua nilai numerik valid
             const unitPrice = safeParseFloat(line.unit_price);
             const quantity = safeParseFloat(line.quantity);
             const discount = safeParseFloat(line.discount);
             const tax = safeParseFloat(line.tax);
 
-            // Calculate subtotal (unit_price * quantity)
             line.subtotal = unitPrice * quantity;
-
-            // Calculate total (subtotal - discount + tax)
             line.total = line.subtotal - discount + tax;
 
-            // Pastikan nilai tidak negatif
             line.subtotal = Math.max(0, line.subtotal);
             line.total = Math.max(0, line.total);
         };
@@ -861,14 +758,112 @@ export default {
             }
         };
 
+        // Data loading
+        const loadReferenceData = async () => {
+            try {
+                isLoading.value = true;
+                console.log('🔄 Loading reference data...');
+
+                const [customersRes, itemsRes, uomRes] = await Promise.all([
+                    axios.get("/customers"),
+                    axios.get("/items"),
+                    axios.get("/unit-of-measures"),
+                ]);
+
+                customers.value = customersRes.data.data || [];
+                items.value = itemsRes.data.data || [];
+                unitOfMeasures.value = uomRes.data.data || [];
+
+                console.log('✅ Reference data loaded');
+                
+                if (!isEditMode.value) {
+                    try {
+                        const nextNumberRes = await axios.get("/orders/next-number");
+                        nextSoNumber.value = nextNumberRes.data.next_so_number;
+                        console.log('📄 Next SO number:', nextSoNumber.value);
+                    } catch (err) {
+                        console.warn('Could not fetch next SO number:', err);
+                    }
+                }
+            } catch (err) {
+                console.error("Error loading reference data:", err);
+                error.value = "Error loading reference data.";
+            } finally {
+                isLoading.value = false;
+            }
+        };
+
+        const loadOrder = async () => {
+            if (!isEditMode.value) return;
+
+            try {
+                isLoading.value = true;
+                console.log('🔄 Loading order:', route.params.id);
+
+                const response = await axios.get(`/sales/orders/${route.params.id}`);
+                const orderData = response.data.data;
+
+                form.value.so_number = orderData.soNumber;
+                form.value.po_number_customer = orderData.poNumberCustomer || '';
+                form.value.so_date = orderData.soDate ? orderData.soDate.substr(0, 10) : '';
+                form.value.customer_id = orderData.customerId;
+                form.value.payment_terms = orderData.paymentTerms || '';
+                form.value.delivery_terms = orderData.deliveryTerms || '';
+                form.value.expected_delivery = orderData.expectedDelivery ? orderData.expectedDelivery.substr(0, 10) : '';
+                form.value.status = orderData.status;
+                form.value.currency_code = orderData.currencyCode || 'IDR';
+
+                if (orderData.salesOrderLines && orderData.salesOrderLines.length > 0) {
+                    form.value.lines = orderData.salesOrderLines.map(line => {
+                        const selectedItem = items.value.find(item => item.item_id === line.itemId);
+                        return {
+                            item_id: line.itemId,
+                            item_code: selectedItem ? selectedItem.item_code : '',
+                            itemSearch: selectedItem ? `${selectedItem.item_code} - ${selectedItem.name}` : '',
+                            showDropdown: false,
+                            unit_price: safeParseFloat(line.unitPrice),
+                            quantity: safeParseFloat(line.quantity) || 1,
+                            uom_id: line.uomId,
+                            delivery_date: line.deliveryDate ? line.deliveryDate.substr(0, 10) : '',
+                            discount: safeParseFloat(line.discount),
+                            tax: safeParseFloat(line.tax),
+                            tax_rate: safeParseFloat(line.taxRate),
+                            applied_taxes: line.appliedTaxes || [],
+                            subtotal: safeParseFloat(line.subtotal),
+                            total: safeParseFloat(line.total),
+                        };
+                    });
+
+                    form.value.lines.forEach((_, index) => {
+                        calculateLineTotals(index);
+                    });
+                }
+
+                if (form.value.customer_id) {
+                    selectedCustomer.value = customers.value.find(
+                        c => c.customer_id === form.value.customer_id
+                    );
+                    if (selectedCustomer.value) {
+                        customerSearch.value = selectedCustomer.value.name;
+                    }
+                }
+
+                console.log('✅ Order loaded successfully');
+            } catch (err) {
+                console.error("Error loading order:", err);
+                error.value = "Error loading order.";
+            } finally {
+                isLoading.value = false;
+            }
+        };
+
         // Navigation
         const goBack = () => {
             router.push("/sales/orders");
         };
 
-        // Save order
+        // Save order with automatic tax calculation
         const saveOrder = async () => {
-            // Validate form
             if (
                 !form.value.so_date ||
                 !form.value.customer_id ||
@@ -878,7 +873,6 @@ export default {
                 return;
             }
 
-            // Validate line items
             if (form.value.lines.length === 0) {
                 error.value = "Order must have at least 1 item.";
                 return;
@@ -886,13 +880,8 @@ export default {
 
             for (let i = 0; i < form.value.lines.length; i++) {
                 const line = form.value.lines[i];
-                if (
-                    !line.item_id ||
-                    !line.unit_price ||
-                    !line.quantity ||
-                    !line.uom_id
-                ) {
-                    error.value = `Item ${i + 1} has incomplete data.`;
+                if (!line.item_id || !line.quantity || !line.uom_id) {
+                    error.value = `Line ${i + 1}: Please fill in all required fields.`;
                     return;
                 }
             }
@@ -901,49 +890,53 @@ export default {
             error.value = "";
 
             try {
-                // Prepare order data dengan nilai yang sudah divalidasi
-                const orderLines = form.value.lines.map(line => ({
-                    line_id: line.line_id,
-                    item_id: line.item_id,
-                    unit_price: safeParseFloat(line.unit_price),
-                    quantity: safeParseFloat(line.quantity),
-                    uom_id: line.uom_id,
-                    delivery_date: line.delivery_date,
-                    discount: safeParseFloat(line.discount),
-                    tax: safeParseFloat(line.tax),
-                    subtotal: safeParseFloat(line.subtotal),
-                    total: safeParseFloat(line.total)
-                }));
-
                 const orderData = {
-                    ...form.value,
-                    total_amount: calculateGrandTotal(),
-                    tax_amount: calculateTotalTax(),
-                    lines: orderLines
+                    so_date: form.value.so_date,
+                    po_number_customer: form.value.po_number_customer,
+                    customer_id: form.value.customer_id,
+                    payment_terms: form.value.payment_terms,
+                    delivery_terms: form.value.delivery_terms,
+                    expected_delivery: form.value.expected_delivery,
+                    status: form.value.status,
+                    currency_code: form.value.currency_code,
+                    lines: form.value.lines.map(line => ({
+                        item_id: line.item_id,
+                        unit_price: line.unit_price,
+                        quantity: line.quantity,
+                        uom_id: line.uom_id,
+                        delivery_date: line.delivery_date,
+                        discount: line.discount,
+                        // Tax will be calculated automatically by backend
+                    }))
                 };
 
-                delete orderData.so_number;
-
+                let response;
                 if (isEditMode.value) {
-                    await axios.put(`/orders/${form.value.so_id}`, orderData);
-                    alert("Order successfully updated!");
+                    response = await axios.put(`/sales/orders/${route.params.id}`, orderData);
                 } else {
-                    await axios.post("/orders", orderData);
-                    alert("Order successfully created!");
+                    response = await axios.post("/sales/orders", orderData);
                 }
 
-                router.push("/sales/orders");
+                if (response.data.status === 'success') {
+                    console.log('✅ Order saved successfully');
+                    
+                    // Update tax summary if provided
+                    if (response.data.tax_summary) {
+                        taxSummary.value = response.data.tax_summary;
+                    }
+                    
+                    router.push("/sales/orders");
+                } else {
+                    throw new Error(response.data.message || 'Unknown error occurred');
+                }
             } catch (err) {
                 console.error("Error saving order:", err);
-
                 if (err.response?.data?.errors) {
                     const errors = err.response.data.errors;
-                    const firstError = Object.values(errors)[0][0];
-                    error.value = firstError;
-                } else if (err.response?.data?.message) {
-                    error.value = err.response.data.message;
+                    const errorMessages = Object.values(errors).flat();
+                    error.value = errorMessages.join(", ");
                 } else {
-                    error.value = "An error occurred while saving the order.";
+                    error.value = err.response?.data?.message || "Error saving order.";
                 }
             } finally {
                 isSubmitting.value = false;
@@ -1002,6 +995,7 @@ export default {
             customerSearch,
             showCustomerDropdown,
             nextSoNumber,
+            taxSummary,
             safeParseFloat,
             getFilteredCustomers,
             selectCustomer,
@@ -1011,6 +1005,7 @@ export default {
             selectItem,
             addLine,
             removeLine,
+            calculateLineTaxes,
             calculateLineTotals,
             calculateSubtotal,
             calculateTotalDiscount,
@@ -1188,7 +1183,7 @@ export default {
 
 .line-headers {
     display: grid;
-    grid-template-columns: 2.5fr 0.8fr 0.8fr 0.8fr 1fr 0.8fr 0.8fr 1.2fr 1.2fr 0.5fr;
+    grid-template-columns: 2.5fr 0.8fr 0.8fr 0.8fr 1fr 0.8fr 0.8fr 0.8fr 1.2fr 1.2fr 0.5fr;
     gap: 0.5rem;
     background-color: #f8fafc;
     padding: 0.75rem 1rem;
@@ -1200,7 +1195,7 @@ export default {
 
 .order-line {
     display: grid;
-    grid-template-columns: 2.5fr 0.8fr 0.8fr 0.8fr 1fr 0.8fr 0.8fr 1.2fr 1.2fr 0.5fr;
+    grid-template-columns: 2.5fr 0.8fr 0.8fr 0.8fr 1fr 0.8fr 0.8fr 0.8fr 1.2fr 1.2fr 0.5fr;
     gap: 0.5rem;
     padding: 0.75rem 1rem;
     border-bottom: 1px solid #e2e8f0;
@@ -1248,21 +1243,86 @@ export default {
 }
 
 .btn-icon.delete:hover {
-    color: #dc2626;
     background-color: #fee2e2;
+    color: #dc2626;
+}
+
+/* Tax display styling */
+.tax-rate-display {
+    font-weight: 500;
+    color: #059669;
+}
+
+.tax-amount-display {
+    font-weight: 500;
+    color: #059669;
+}
+
+.tax-breakdown {
+    margin-top: 0.25rem;
+}
+
+.tax-detail {
+    display: block;
+    font-size: 0.6rem;
+    color: #64748b;
+    line-height: 1.2;
+}
+
+/* Tax Summary Section */
+.tax-summary-section {
+    background-color: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    border-radius: 0.375rem;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+
+.tax-summary-section h4 {
+    margin: 0 0 0.75rem 0;
+    color: #065f46;
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.tax-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.5rem;
+}
+
+.tax-group {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem;
+    background-color: white;
+    border-radius: 0.25rem;
+    border: 1px solid #d1fae5;
+}
+
+.tax-name {
+    font-size: 0.75rem;
+    color: #064e3b;
+    font-weight: 500;
+}
+
+.tax-amount {
+    font-size: 0.75rem;
+    color: #059669;
+    font-weight: 600;
 }
 
 .order-totals {
-    border-top: 1px solid #e2e8f0;
-    padding: 1rem;
     background-color: #f8fafc;
+    padding: 1rem 1.5rem;
+    border-top: 1px solid #e2e8f0;
 }
 
 .total-row {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     align-items: center;
-    gap: 1rem;
     margin-bottom: 0.5rem;
 }
 
@@ -1272,105 +1332,61 @@ export default {
 
 .total-label {
     font-weight: 500;
-    color: #475569;
-    width: 10rem;
-    text-align: right;
+    color: #64748b;
 }
 
 .total-value {
-    width: 10rem;
-    text-align: right;
-    font-weight: 500;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.grand-total {
+    border-top: 1px solid #e2e8f0;
+    padding-top: 0.5rem;
+    margin-top: 0.5rem;
 }
 
 .grand-total .total-label,
 .grand-total .total-value {
     font-size: 1.125rem;
-    font-weight: 600;
     color: #1e293b;
 }
 
-.btn {
-    padding: 0.625rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    border-radius: 0.375rem;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    border: none;
-    transition: background-color 0.2s, color 0.2s;
-}
-
-.btn-sm {
-    padding: 0.375rem 0.75rem;
-    font-size: 0.75rem;
-}
-
-.btn-primary {
-    background-color: #2563eb;
-    color: white;
-}
-
-.btn-primary:hover:not(:disabled) {
-    background-color: #1d4ed8;
-}
-
-.btn-primary:disabled {
-    background-color: #93c5fd;
-    cursor: not-allowed;
-}
-
-.btn-secondary {
-    background-color: #e2e8f0;
-    color: #1e293b;
-}
-
-.btn-secondary:hover {
-    background-color: #cbd5e1;
-}
-
-/* Enhanced dropdown styling */
+/* Dropdown styling */
 .dropdown-container {
     position: relative;
-    width: 100%;
-    z-index: 10;
 }
 
 .dropdown-menu {
     position: absolute;
     top: 100%;
     left: 0;
-    width: 100%;
-    max-height: 250px;
+    right: 0;
+    z-index: 1000;
+    max-height: 200px;
     overflow-y: auto;
     background-color: white;
     border: 1px solid #e2e8f0;
     border-radius: 0.375rem;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-    z-index: 1000;
-    margin-top: 0.25rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 .dropdown-item {
-    padding: 0.75rem 1rem;
+    padding: 0.75rem;
     cursor: pointer;
-    transition: background-color 0.2s;
-    border-bottom: 1px solid #f8fafc;
-}
-
-.dropdown-item:last-child {
-    border-bottom: none;
+    border-bottom: 1px solid #f1f5f9;
 }
 
 .dropdown-item:hover {
     background-color: #f8fafc;
 }
 
+.dropdown-item:last-child {
+    border-bottom: none;
+}
+
 .dropdown-item.text-muted {
-    color: #94a3b8;
-    cursor: default;
+    color: #64748b;
     font-style: italic;
 }
 
@@ -1451,7 +1467,7 @@ export default {
 
     .order-line,
     .line-headers {
-        grid-template-columns: repeat(9, 1fr) 0.5fr;
+        grid-template-columns: repeat(10, 1fr) 0.5fr;
         font-size: 0.75rem;
         padding: 0.5rem;
     }
