@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use App\Models\Tax\Tax;
 
 class Vendor extends Model
 {
@@ -47,6 +49,49 @@ class Vendor extends Model
     public function invoices()
     {
         return $this->hasMany(VendorInvoice::class, 'vendor_id');
+    }
+
+    /**
+     * Get default taxes for this vendor
+     */
+    public function taxes(): BelongsToMany
+    {
+        return $this->belongsToMany(Tax::class, 'vendor_taxes', 'vendor_id', 'tax_id')
+                    ->where('is_active', true)
+                    ->whereIn('tax_type', ['purchase', 'both'])
+                    ->orderBy('sequence');
+    }
+
+    /**
+     * Add default tax to vendor
+     */
+    public function addTax($taxId)
+    {
+        return $this->taxes()->attach($taxId);
+    }
+
+    /**
+     * Remove tax from vendor
+     */
+    public function removeTax($taxId)
+    {
+        return $this->taxes()->detach($taxId);
+    }
+
+    /**
+     * Get combined default tax rate for this vendor
+     */
+    public function getDefaultTaxRateAttribute()
+    {
+        return $this->taxes->sum('rate');
+    }
+
+    /**
+     * Check if vendor has any default inclusive taxes
+     */
+    public function hasInclusiveTaxes()
+    {
+        return $this->taxes->where('included_in_price', true)->isNotEmpty();
     }
     
     /**

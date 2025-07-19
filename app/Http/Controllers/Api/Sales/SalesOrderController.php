@@ -9,6 +9,7 @@ use App\Models\Sales\Customer;
 use App\Models\Item;
 use App\Models\UnitOfMeasure;
 use App\Models\CurrencyRate;
+use App\Services\TaxCalculationService; // ⭐ ADD THIS
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -22,6 +23,14 @@ use Illuminate\Support\Facades\Log;
 
 class SalesOrderController extends Controller
 {
+    protected $taxCalculationService; // ⭐ ADD THIS
+
+    // ⭐ ADD CONSTRUCTOR
+    public function __construct(TaxCalculationService $taxCalculationService)
+    {
+        $this->taxCalculationService = $taxCalculationService;
+    }
+
     /**
      * Generate the next sales order number with format SO-yy-000000
      *
@@ -35,6 +44,7 @@ class SalesOrderController extends Controller
         // Get the latest sales order number for current year
         $latestSalesOrder = SalesOrder::where('so_number', 'like', $prefix . '%')
             ->orderBy('so_number', 'desc')
+            ->lockForUpdate() // ⭐ ADD LOCK TO PREVENT DUPLICATE NUMBERS
             ->first();
 
         if ($latestSalesOrder) {
@@ -77,7 +87,7 @@ class SalesOrderController extends Controller
                     $q->where('so_number', 'like', "%{$search}%")
                         ->orWhere('po_number_customer', 'like', "%{$search}%")
                         ->orWhereHas('customer', function ($q2) use ($search) {
-                            $q2->where('name', 'like', "%{$search}%")
+                            $q2->where('customer_name', 'like', "%{$search}%") // ⭐ FIXED FIELD NAME
                                 ->orWhere('customer_code', 'like', "%{$search}%");
                         });
                 });
@@ -165,7 +175,7 @@ class SalesOrderController extends Controller
     }
 
     /**
-     * Store a newly created sales order
+     * Store a newly created sales order with AUTOMATIC TAX CALCULATION
      */
     public function store(Request $request)
     {
@@ -181,13 +191,13 @@ class SalesOrderController extends Controller
             'status' => 'required|string|max:50',
             'currency_code' => 'nullable|string|size:3',
             'lines' => 'required|array|min:1',
-            'lines.*.item_id' => 'required|exists:items,item_id',
+            'lines.*.item_id' => 'required|exists:Item,item_id', // ⭐ FIXED TABLE NAME
             'lines.*.unit_price' => 'nullable|numeric|min:0',
             'lines.*.quantity' => 'required|numeric|min:0',
-            'lines.*.uom_id' => 'required|exists:unit_of_measures,uom_id',
+            'lines.*.uom_id' => 'required|exists:UnitOfMeasure,uom_id', // ⭐ FIXED TABLE NAME
             'lines.*.delivery_date' => 'nullable|date|after_or_equal:so_date',
             'lines.*.discount' => 'nullable|numeric|min:0',
-            'lines.*.tax' => 'nullable|numeric|min:0',
+            // ⭐ REMOVED TAX VALIDATION - WILL BE CALCULATED AUTOMATICALLY
         ]);
 
         if ($validator->fails()) {
@@ -197,8 +207,8 @@ class SalesOrderController extends Controller
         try {
             DB::beginTransaction();
 
-            // Get the customer to check for preferred currency
-            $customer = Customer::find($request->customer_id);
+            // Get the customer to check for preferred currency and taxes
+            $customer = Customer::with('taxes')->find($request->customer_id); // ⭐ LOAD TAXES
 
             // Determine currency to use
             $currencyCode = $request->currency_code ?? $customer->preferred_currency ?? config('app.base_currency', 'USD');
@@ -249,22 +259,28 @@ class SalesOrderController extends Controller
                 'base_currency_tax' => 0
             ]);
 
+            // ⭐ CALCULATE TAXES AUTOMATICALLY USING TAX SERVICE
+            $orderTaxCalculation = $this->taxCalculationService->calculateOrderTaxes(
+                $request->lines,
+                $request->customer_id,
+                null,
+                'sales'
+            );
+
             $totalAmount = 0;
             $taxAmount = 0;
 
-            // Create order lines
-            foreach ($request->lines as $lineData) {
-                $item = Item::find($lineData['item_id']);
+            // Create order lines with calculated taxes
+            foreach ($orderTaxCalculation['lines'] as $lineData) {
+                $item = Item::with('salesTaxes')->find($lineData['item_id']);
                 $unitPrice = $lineData['unit_price'] ?? $item->sale_price ?? 0;
                 $quantity = $lineData['quantity'];
                 $discount = $lineData['discount'] ?? 0;
-                $tax = $lineData['tax'] ?? 0;
                 $deliveryDate = $lineData['delivery_date'] ?? null;
 
-                $subtotal = $unitPrice * $quantity;
-                $lineTotal = $subtotal - $discount + $tax;
+                $taxCalc = $lineData['tax_calculation']; // ⭐ GET TAX CALCULATION RESULT
 
-                SOLine::create([
+                $soLine = SOLine::create([
                     'so_id' => $salesOrder->so_id,
                     'item_id' => $lineData['item_id'],
                     'unit_price' => $unitPrice,
@@ -272,13 +288,23 @@ class SalesOrderController extends Controller
                     'uom_id' => $lineData['uom_id'],
                     'delivery_date' => $deliveryDate,
                     'discount' => $discount,
-                    'tax' => $tax,
-                    'subtotal' => $subtotal,
-                    'total' => $lineTotal
+                    'tax' => $taxCalc['total_tax_amount'], // ⭐ AUTO CALCULATED TAX
+                    'tax_rate' => $taxCalc['combined_tax_rate'] ?? 0, // ⭐ NEW FIELD
+                    'applied_taxes' => $taxCalc['tax_details'] ?? [], // ⭐ NEW FIELD
+                    'subtotal_before_tax' => $taxCalc['subtotal_after_discount'] ?? ($unitPrice * $quantity - $discount), // ⭐ NEW FIELD
+                    'tax_inclusive_amount' => $taxCalc['price_includes_tax'] ? $taxCalc['line_total'] : 0, // ⭐ NEW FIELD
+                    'subtotal' => $taxCalc['subtotal'] ?? ($unitPrice * $quantity),
+                    'total' => $taxCalc['line_total'] ?? ($unitPrice * $quantity - $discount + $taxCalc['total_tax_amount']),
+                    // ⭐ BASE CURRENCY CALCULATIONS
+                    'base_currency_unit_price' => $unitPrice * $exchangeRate,
+                    'base_currency_subtotal' => ($taxCalc['subtotal'] ?? ($unitPrice * $quantity)) * $exchangeRate,
+                    'base_currency_discount' => $discount * $exchangeRate,
+                    'base_currency_tax' => $taxCalc['total_tax_amount'] * $exchangeRate,
+                    'base_currency_total' => ($taxCalc['line_total'] ?? ($unitPrice * $quantity - $discount + $taxCalc['total_tax_amount'])) * $exchangeRate
                 ]);
 
-                $totalAmount += $lineTotal;
-                $taxAmount += $tax;
+                $totalAmount += $taxCalc['line_total'] ?? ($unitPrice * $quantity - $discount + $taxCalc['total_tax_amount']);
+                $taxAmount += $taxCalc['total_tax_amount'];
             }
 
             // Update order totals
@@ -291,10 +317,18 @@ class SalesOrderController extends Controller
 
             DB::commit();
 
+            Log::info('Sales order created with automatic tax calculation', [
+                'so_number' => $soNumber,
+                'customer_id' => $request->customer_id,
+                'total_amount' => $totalAmount,
+                'tax_amount' => $taxAmount
+            ]);
+
             return response()->json([
                 'status' => 'success',
-                'message' => 'Sales order created successfully',
-                'data' => $salesOrder->load(['customer', 'salesOrderLines.item'])
+                'message' => 'Sales order created successfully with automatic tax calculation', // ⭐ UPDATED MESSAGE
+                'data' => $salesOrder->load(['customer', 'salesOrderLines.item']),
+                'tax_summary' => $orderTaxCalculation['tax_summary'] ?? [] // ⭐ ADD TAX SUMMARY
             ], 201);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -330,6 +364,27 @@ class SalesOrderController extends Controller
                 ], 404);
             }
 
+            // ⭐ ADD TAX BREAKDOWN CALCULATION
+            $taxBreakdown = [];
+            foreach ($order->salesOrderLines as $line) {
+                if ($line->applied_taxes && is_array($line->applied_taxes)) {
+                    foreach ($line->applied_taxes as $tax) {
+                        $taxName = $tax['tax_name'] ?? 'Unknown Tax';
+                        if (!isset($taxBreakdown[$taxName])) {
+                            $taxBreakdown[$taxName] = [
+                                'tax_name' => $taxName,
+                                'tax_rate' => $tax['tax_rate'] ?? 0,
+                                'base_amount' => 0,
+                                'tax_amount' => 0
+                            ];
+                        }
+                        $taxBreakdown[$taxName]['base_amount'] += $tax['base_amount'] ?? 0;
+                        $taxBreakdown[$taxName]['tax_amount'] += $tax['tax_amount'] ?? 0;
+                    }
+                }
+            }
+            $order->tax_breakdown = array_values($taxBreakdown); // ⭐ ADD TAX BREAKDOWN TO RESPONSE
+
             return response()->json([
                 'status' => 'success',
                 'data' => $order
@@ -345,7 +400,7 @@ class SalesOrderController extends Controller
     }
 
     /**
-     * Update the specified sales order
+     * Update the specified sales order with AUTOMATIC TAX RECALCULATION
      */
     public function update(Request $request, $id)
     {
@@ -378,13 +433,13 @@ class SalesOrderController extends Controller
             'status' => 'required|string|max:50',
             'currency_code' => 'nullable|string|size:3',
             'lines' => 'required|array|min:1',
-            'lines.*.item_id' => 'required|exists:items,item_id',
+            'lines.*.item_id' => 'required|exists:Item,item_id', // ⭐ FIXED TABLE NAME
             'lines.*.unit_price' => 'nullable|numeric|min:0',
             'lines.*.quantity' => 'required|numeric|min:0',
-            'lines.*.uom_id' => 'required|exists:unit_of_measures,uom_id',
+            'lines.*.uom_id' => 'required|exists:UnitOfMeasure,uom_id', // ⭐ FIXED TABLE NAME
             'lines.*.delivery_date' => 'nullable|date|after_or_equal:so_date',
             'lines.*.discount' => 'nullable|numeric|min:0',
-            'lines.*.tax' => 'nullable|numeric|min:0',
+            // ⭐ REMOVED TAX VALIDATION - WILL BE CALCULATED AUTOMATICALLY
         ];
 
         $validator = Validator::make($request->all(), $validatorRules);
@@ -397,7 +452,7 @@ class SalesOrderController extends Controller
             DB::beginTransaction();
 
             // Get customer and currency info
-            $customer = Customer::find($request->customer_id);
+            $customer = Customer::with('taxes')->find($request->customer_id); // ⭐ LOAD TAXES
             $currencyCode = $request->currency_code ?? $customer->preferred_currency ?? config('app.base_currency', 'USD');
             $baseCurrency = config('app.base_currency', 'USD');
 
@@ -440,19 +495,26 @@ class SalesOrderController extends Controller
             // Delete existing lines and create new ones
             $order->salesOrderLines()->delete();
 
+            // ⭐ RECALCULATE TAXES AUTOMATICALLY USING TAX SERVICE
+            $orderTaxCalculation = $this->taxCalculationService->calculateOrderTaxes(
+                $request->lines,
+                $request->customer_id,
+                null,
+                'sales'
+            );
+
             $totalAmount = 0;
             $taxAmount = 0;
 
-            foreach ($request->lines as $lineData) {
-                $item = Item::find($lineData['item_id']);
+            // Create new lines with calculated taxes
+            foreach ($orderTaxCalculation['lines'] as $lineData) {
+                $item = Item::with('salesTaxes')->find($lineData['item_id']);
                 $unitPrice = $lineData['unit_price'] ?? $item->sale_price ?? 0;
                 $quantity = $lineData['quantity'];
                 $discount = $lineData['discount'] ?? 0;
-                $tax = $lineData['tax'] ?? 0;
                 $deliveryDate = $lineData['delivery_date'] ?? null;
 
-                $subtotal = $unitPrice * $quantity;
-                $lineTotal = $subtotal - $discount + $tax;
+                $taxCalc = $lineData['tax_calculation']; // ⭐ GET TAX CALCULATION RESULT
 
                 SOLine::create([
                     'so_id' => $order->so_id,
@@ -462,13 +524,23 @@ class SalesOrderController extends Controller
                     'uom_id' => $lineData['uom_id'],
                     'delivery_date' => $deliveryDate,
                     'discount' => $discount,
-                    'tax' => $tax,
-                    'subtotal' => $subtotal,
-                    'total' => $lineTotal
+                    'tax' => $taxCalc['total_tax_amount'], // ⭐ AUTO CALCULATED TAX
+                    'tax_rate' => $taxCalc['combined_tax_rate'] ?? 0, // ⭐ NEW FIELD
+                    'applied_taxes' => $taxCalc['tax_details'] ?? [], // ⭐ NEW FIELD
+                    'subtotal_before_tax' => $taxCalc['subtotal_after_discount'] ?? ($unitPrice * $quantity - $discount), // ⭐ NEW FIELD
+                    'tax_inclusive_amount' => $taxCalc['price_includes_tax'] ? $taxCalc['line_total'] : 0, // ⭐ NEW FIELD
+                    'subtotal' => $taxCalc['subtotal'] ?? ($unitPrice * $quantity),
+                    'total' => $taxCalc['line_total'] ?? ($unitPrice * $quantity - $discount + $taxCalc['total_tax_amount']),
+                    // ⭐ BASE CURRENCY CALCULATIONS
+                    'base_currency_unit_price' => $unitPrice * $exchangeRate,
+                    'base_currency_subtotal' => ($taxCalc['subtotal'] ?? ($unitPrice * $quantity)) * $exchangeRate,
+                    'base_currency_discount' => $discount * $exchangeRate,
+                    'base_currency_tax' => $taxCalc['total_tax_amount'] * $exchangeRate,
+                    'base_currency_total' => ($taxCalc['line_total'] ?? ($unitPrice * $quantity - $discount + $taxCalc['total_tax_amount'])) * $exchangeRate
                 ]);
 
-                $totalAmount += $lineTotal;
-                $taxAmount += $tax;
+                $totalAmount += $taxCalc['line_total'] ?? ($unitPrice * $quantity - $discount + $taxCalc['total_tax_amount']);
+                $taxAmount += $taxCalc['total_tax_amount'];
             }
 
             // Update order totals
@@ -481,10 +553,18 @@ class SalesOrderController extends Controller
 
             DB::commit();
 
+            Log::info('Sales order updated with automatic tax recalculation', [
+                'so_id' => $order->so_id,
+                'so_number' => $order->so_number,
+                'total_amount' => $totalAmount,
+                'tax_amount' => $taxAmount
+            ]);
+
             return response()->json([
                 'status' => 'success',
-                'message' => 'Sales order updated successfully',
-                'data' => $order->load(['customer', 'salesOrderLines.item'])
+                'message' => 'Sales order updated successfully with automatic tax recalculation', // ⭐ UPDATED MESSAGE
+                'data' => $order->load(['customer', 'salesOrderLines.item']),
+                'tax_summary' => $orderTaxCalculation['tax_summary'] ?? [] // ⭐ ADD TAX SUMMARY
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -496,6 +576,108 @@ class SalesOrderController extends Controller
             ], 500);
         }
     }
+
+    // ⭐ ADD NEW METHODS FOR TAX PREVIEW AND CONFIGURATION
+
+    /**
+     * Preview tax calculation for line items before creating/updating order
+     */
+    public function previewTaxCalculation(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'customer_id' => 'required|exists:Customer,customer_id',
+            'lines' => 'required|array|min:1',
+            'lines.*.item_id' => 'required|exists:Item,item_id',
+            'lines.*.quantity' => 'required|numeric|min:0.0001',
+            'lines.*.unit_price' => 'nullable|numeric|min:0',
+            'lines.*.discount' => 'nullable|numeric|min:0',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            // Calculate taxes for preview
+            $orderTaxCalculation = $this->taxCalculationService->calculateOrderTaxes(
+                $request->lines,
+                $request->customer_id,
+                null,
+                'sales'
+            );
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Tax calculation preview generated successfully',
+                'data' => [
+                    'lines' => $orderTaxCalculation['lines'],
+                    'order_subtotal' => $orderTaxCalculation['order_subtotal'],
+                    'order_tax_amount' => $orderTaxCalculation['order_tax_amount'],
+                    'order_total' => $orderTaxCalculation['order_total'],
+                    'tax_summary' => $orderTaxCalculation['tax_summary']
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error calculating tax preview: ' . $e->getMessage());
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to calculate tax preview',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get applicable taxes for an item and customer combination
+     */
+    public function getApplicableTaxes(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'item_id' => 'required|exists:Item,item_id',
+            'customer_id' => 'required|exists:Customer,customer_id',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $taxes = $this->taxCalculationService->getApplicableTaxes(
+                $request->item_id,
+                $request->customer_id,
+                null,
+                'sales'
+            );
+
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'item_id' => $request->item_id,
+                    'customer_id' => $request->customer_id,
+                    'applicable_taxes' => $taxes,
+                    'combined_rate' => $taxes->sum('rate')
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error getting applicable taxes: ' . $e->getMessage());
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to get applicable taxes',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // ⭐ KEEP ALL EXISTING METHODS (destroy, downloadTemplate, importFromExcel, exportToExcel, print, getStatistics)
+    // The rest of your existing methods remain unchanged...
 
     /**
      * Remove the specified sales order
@@ -640,27 +822,26 @@ class SalesOrderController extends Controller
                 'E1' => 'Unit Price',
                 'F1' => 'Delivery Date',
                 'G1' => 'Discount',
-                'H1' => 'Tax',
-                'I1' => 'Notes'
+                'H1' => 'Notes' // ⭐ REMOVED TAX COLUMN - WILL BE AUTO CALCULATED
             ];
 
             foreach ($lineHeaders as $cell => $value) {
                 $linesSheet->setCellValue($cell, $value);
             }
 
-            $linesSheet->getStyle('A1:I1')->applyFromArray($headerStyle);
+            $linesSheet->getStyle('A1:H1')->applyFromArray($headerStyle);
 
             // Set column widths for lines sheet
-            $lineColumnWidths = ['A' => 15, 'B' => 15, 'C' => 10, 'D' => 10, 'E' => 12, 'F' => 12, 'G' => 10, 'H' => 10, 'I' => 25];
+            $lineColumnWidths = ['A' => 15, 'B' => 15, 'C' => 10, 'D' => 10, 'E' => 12, 'F' => 12, 'G' => 10, 'H' => 25];
             foreach ($lineColumnWidths as $column => $width) {
                 $linesSheet->getColumnDimension($column)->setWidth($width);
             }
 
             // Add sample line data
             $sampleLineData = [
-                ['CUST001', 'ITEM001', 10, 'PCS', 100.00, '2024-02-01', 0, 10.00, 'Line 1 for customer order'],
-                ['CUST001', 'ITEM002', 5, 'KG', 50.00, '2024-02-05', 5.00, 2.50, 'Line 2 for customer order'],
-                ['CUST002', 'ITEM003', 20, 'PCS', 75.00, '2024-02-10', 0, 15.00, 'Line 1 for customer order']
+                ['CUST001', 'ITEM001', 10, 'PCS', 100.00, '2024-02-01', 0, 'Line 1 - Tax will be calculated automatically'],
+                ['CUST001', 'ITEM002', 5, 'KG', 50.00, '2024-02-05', 5.00, 'Line 2 - Tax will be calculated automatically'],
+                ['CUST002', 'ITEM003', 20, 'PCS', 75.00, '2024-02-10', 0, 'Line 3 - Tax will be calculated automatically']
             ];
 
             $row = 2;
@@ -683,6 +864,7 @@ class SalesOrderController extends Controller
                 '1. GENERAL RULES:',
                 '   - Fields marked with * are required',
                 '   - Sales Order numbers will be auto-generated (SO-yy-000000 format)',
+                '   - TAX WILL BE CALCULATED AUTOMATICALLY based on item and customer configuration', // ⭐ NEW INSTRUCTION
                 '   - Use the exact codes from Reference Data sheet',
                 '   - Date format: YYYY-MM-DD (e.g., 2024-01-15)',
                 '   - Decimal numbers use dot (.) as separator',
@@ -699,12 +881,16 @@ class SalesOrderController extends Controller
                 '   - UOM Code: Must exist in system',
                 '   - Unit Price: If empty, system will use default sale price',
                 '   - Delivery Date: Optional, format YYYY-MM-DD (must be after SO Date)',
-                '   - Discount and Tax: Optional, use 0 if not applicable',
+                '   - Discount: Optional, use 0 if not applicable',
+                '   - TAX: DO NOT ENTER - System will calculate automatically based on:',
+                '     * Item tax configuration (if configured)',
+                '     * Customer default taxes (if item has no tax configuration)',
                 '',
                 '4. IMPORT PROCESS:',
                 '   - System will auto-generate SO Numbers (SO-yy-000000 format)',
+                '   - System will calculate taxes automatically for each line',
                 '   - System will first create Sales Orders from "Sales Orders" sheet',
-                '   - Then add lines from "Sales Order Lines" sheet',
+                '   - Then add lines from "Sales Order Lines" sheet with calculated taxes',
                 '   - Lines are matched to orders by Customer Code',
                 '',
                 '5. ERROR HANDLING:',
@@ -780,7 +966,7 @@ class SalesOrderController extends Controller
     }
 
     /**
-     * Import sales orders from Excel file
+     * Import sales orders from Excel file with AUTOMATIC TAX CALCULATION
      */
     public function importFromExcel(Request $request)
     {
@@ -912,119 +1098,153 @@ class SalesOrderController extends Controller
                 }
             }
 
-            // Process Sales Order Lines
+            // Process Sales Order Lines with AUTOMATIC TAX CALCULATION
             if ($linesHighestRow >= 2) {
+                // Group lines by customer for batch tax calculation
+                $linesByCustomer = [];
                 for ($row = 2; $row <= $linesHighestRow; $row++) {
-                    try {
-                        $customerCode = trim($linesSheet->getCell('A' . $row)->getValue() ?? '');
-                        $itemCode = trim($linesSheet->getCell('B' . $row)->getValue() ?? '');
-                        $quantity = $linesSheet->getCell('C' . $row)->getValue();
-                        $uomCode = trim($linesSheet->getCell('D' . $row)->getValue() ?? '');
-                        $unitPrice = $linesSheet->getCell('E' . $row)->getValue();
-                        $deliveryDate = $linesSheet->getCell('F' . $row)->getFormattedValue();
-                        $discount = $linesSheet->getCell('G' . $row)->getValue() ?? 0;
-                        $tax = $linesSheet->getCell('H' . $row)->getValue() ?? 0;
+                    $customerCode = trim($linesSheet->getCell('A' . $row)->getValue() ?? '');
+                    $itemCode = trim($linesSheet->getCell('B' . $row)->getValue() ?? '');
+                    $quantity = $linesSheet->getCell('C' . $row)->getValue();
+                    $uomCode = trim($linesSheet->getCell('D' . $row)->getValue() ?? '');
+                    $unitPrice = $linesSheet->getCell('E' . $row)->getValue();
+                    $deliveryDate = $linesSheet->getCell('F' . $row)->getFormattedValue();
+                    $discount = $linesSheet->getCell('G' . $row)->getValue() ?? 0;
 
-                        // Skip empty rows
-                        if (empty($customerCode) && empty($itemCode)) {
-                            continue;
+                    if (!empty($customerCode) && !empty($itemCode)) {
+                        if (!isset($linesByCustomer[$customerCode])) {
+                            $linesByCustomer[$customerCode] = [];
                         }
+                        $linesByCustomer[$customerCode][] = [
+                            'row' => $row,
+                            'item_code' => $itemCode,
+                            'quantity' => $quantity,
+                            'uom_code' => $uomCode,
+                            'unit_price' => $unitPrice,
+                            'delivery_date' => $deliveryDate,
+                            'discount' => $discount
+                        ];
+                    }
+                }
 
-                        // Validate required fields
-                        if (empty($customerCode) || empty($itemCode) || empty($quantity) || empty($uomCode)) {
-                            $errors[] = "Line Row {$row}: Missing required fields";
-                            $errorCount++;
-                            continue;
-                        }
+                // Process each customer's lines with tax calculation
+                foreach ($linesByCustomer as $customerCode => $customerLines) {
+                    if (!isset($createdOrders[$customerCode])) {
+                        continue;
+                    }
 
-                        // Check if Sales Order exists for this customer
-                        if (!isset($createdOrders[$customerCode])) {
-                            $errors[] = "Line Row {$row}: Sales Order for customer '{$customerCode}' not found in headers";
-                            $errorCount++;
-                            continue;
-                        }
+                    $salesOrder = $createdOrders[$customerCode];
+                    $validLines = [];
 
-                        // Find item
-                        $item = Item::where('item_code', $itemCode)->where('is_sellable', true)->first();
-                        if (!$item) {
-                            $errors[] = "Line Row {$row}: Item with code '{$itemCode}' not found or not sellable";
-                            $errorCount++;
-                            continue;
-                        }
-
-                        // Find UOM
-                        $uom = UnitOfMeasure::where('code', $uomCode)->orWhere('symbol', $uomCode)->first();
-                        if (!$uom) {
-                            $errors[] = "Line Row {$row}: UOM with code '{$uomCode}' not found";
-                            $errorCount++;
-                            continue;
-                        }
-
-                        // Use provided unit price or default from item
-                        $finalUnitPrice = !empty($unitPrice) ? $unitPrice : ($item->sale_price ?? 0);
-
-                        // Format delivery date
-                        $deliveryDateFormatted = null;
-                        if (!empty($deliveryDate)) {
-                            try {
-                                $deliveryDateFormatted = date('Y-m-d', strtotime($deliveryDate));
-
-                                // Validate delivery date is not before SO date
-                                $soDate = $createdOrders[$customerCode]->so_date;
-                                if ($deliveryDateFormatted < $soDate) {
-                                    $errors[] = "Line Row {$row}: Delivery date cannot be before order date";
-                                    $errorCount++;
-                                    continue;
-                                }
-                            } catch (\Exception $e) {
-                                $errors[] = "Line Row {$row}: Invalid delivery date format";
+                    // Validate all lines first
+                    foreach ($customerLines as $lineData) {
+                        $row = $lineData['row'];
+                        try {
+                            // Find item
+                            $item = Item::where('item_code', $lineData['item_code'])->first();
+                            if (!$item) {
+                                $errors[] = "Line Row {$row}: Item with code '{$lineData['item_code']}' not found";
                                 $errorCount++;
                                 continue;
                             }
+
+                            // Find UOM
+                            $uom = UnitOfMeasure::where('uom_code', $lineData['uom_code'])
+                                                ->orWhere('uom_name', $lineData['uom_code'])
+                                                ->first();
+                            if (!$uom) {
+                                $errors[] = "Line Row {$row}: UOM with code '{$lineData['uom_code']}' not found";
+                                $errorCount++;
+                                continue;
+                            }
+
+                            $validLines[] = [
+                                'item_id' => $item->item_id,
+                                'quantity' => $lineData['quantity'],
+                                'unit_price' => !empty($lineData['unit_price']) ? $lineData['unit_price'] : ($item->sale_price ?? 0),
+                                'uom_id' => $uom->uom_id,
+                                'delivery_date' => $lineData['delivery_date'],
+                                'discount' => $lineData['discount'],
+                                'row' => $row
+                            ];
+                        } catch (\Exception $e) {
+                            $errors[] = "Line Row {$row}: " . $e->getMessage();
+                            $errorCount++;
                         }
+                    }
 
-                        $subtotal = $finalUnitPrice * $quantity;
-                        $lineTotal = $subtotal - $discount + $tax;
+                    // Calculate taxes for valid lines using tax service
+                    if (!empty($validLines)) {
+                        try {
+                            $orderTaxCalculation = $this->taxCalculationService->calculateOrderTaxes(
+                                $validLines,
+                                $salesOrder->customer_id,
+                                null,
+                                'sales'
+                            );
 
-                        // Create order line
-                        SOLine::create([
-                            'so_id' => $createdOrders[$customerCode]->so_id,
-                            'item_id' => $item->item_id,
-                            'unit_price' => $finalUnitPrice,
-                            'quantity' => $quantity,
-                            'uom_id' => $uom->uom_id,
-                            'delivery_date' => $deliveryDateFormatted,
-                            'discount' => $discount,
-                            'tax' => $tax,
-                            'subtotal' => $subtotal,
-                            'total' => $lineTotal
-                        ]);
-                    } catch (\Exception $e) {
-                        $errors[] = "Line Row {$row}: " . $e->getMessage();
-                        $errorCount++;
+                            // Create order lines with calculated taxes
+                            foreach ($orderTaxCalculation['lines'] as $lineData) {
+                                $taxCalc = $lineData['tax_calculation'];
+
+                                // Format delivery date
+                                $deliveryDateFormatted = null;
+                                if (!empty($lineData['delivery_date'])) {
+                                    try {
+                                        $deliveryDateFormatted = date('Y-m-d', strtotime($lineData['delivery_date']));
+                                        if ($deliveryDateFormatted < $salesOrder->so_date) {
+                                            $errors[] = "Line Row {$lineData['row']}: Delivery date cannot be before order date";
+                                            $errorCount++;
+                                            continue;
+                                        }
+                                    } catch (\Exception $e) {
+                                        $errors[] = "Line Row {$lineData['row']}: Invalid delivery date format";
+                                        $errorCount++;
+                                        continue;
+                                    }
+                                }
+
+                                SOLine::create([
+                                    'so_id' => $salesOrder->so_id,
+                                    'item_id' => $lineData['item_id'],
+                                    'unit_price' => $lineData['unit_price'],
+                                    'quantity' => $lineData['quantity'],
+                                    'uom_id' => $lineData['uom_id'],
+                                    'delivery_date' => $deliveryDateFormatted,
+                                    'discount' => $lineData['discount'],
+                                    'tax' => $taxCalc['total_tax_amount'], // ⭐ AUTO CALCULATED TAX
+                                    'tax_rate' => $taxCalc['combined_tax_rate'] ?? 0,
+                                    'applied_taxes' => $taxCalc['tax_details'] ?? [],
+                                    'subtotal_before_tax' => $taxCalc['subtotal_after_discount'] ?? 0,
+                                    'tax_inclusive_amount' => $taxCalc['price_includes_tax'] ? $taxCalc['line_total'] : 0,
+                                    'subtotal' => $taxCalc['subtotal'] ?? 0,
+                                    'total' => $taxCalc['line_total'] ?? 0
+                                ]);
+                            }
+
+                            // Update order totals
+                            $totalAmount = $orderTaxCalculation['order_total'] ?? 0;
+                            $taxAmount = $orderTaxCalculation['order_tax_amount'] ?? 0;
+
+                            $salesOrder->update([
+                                'total_amount' => $totalAmount,
+                                'tax_amount' => $taxAmount,
+                                'base_currency_total' => $totalAmount * $salesOrder->exchange_rate,
+                                'base_currency_tax' => $taxAmount * $salesOrder->exchange_rate
+                            ]);
+                        } catch (\Exception $e) {
+                            $errors[] = "Error calculating taxes for customer {$customerCode}: " . $e->getMessage();
+                            $errorCount++;
+                        }
                     }
                 }
-            }
-
-            // Update order totals
-            foreach ($createdOrders as $order) {
-                $lines = $order->salesOrderLines;
-                $totalAmount = $lines->sum('total');
-                $taxAmount = $lines->sum('tax');
-
-                $order->update([
-                    'total_amount' => $totalAmount,
-                    'tax_amount' => $taxAmount,
-                    'base_currency_total' => $totalAmount * $order->exchange_rate,
-                    'base_currency_tax' => $taxAmount * $order->exchange_rate
-                ]);
             }
 
             DB::commit();
 
             return response()->json([
                 'status' => 'success',
-                'message' => 'Import completed',
+                'message' => 'Import completed with automatic tax calculation', // ⭐ UPDATED MESSAGE
                 'summary' => [
                     'total_processed' => $successCount + $errorCount,
                     'successful' => $successCount,
@@ -1111,7 +1331,7 @@ class SalesOrderController extends Controller
                 $orderSheet->setCellValue('B' . $row, $order->po_number_customer ?? '');
                 $orderSheet->setCellValue('C' . $row, $order->so_date->format('Y-m-d'));
                 $orderSheet->setCellValue('D' . $row, $order->customer->customer_code ?? '');
-                $orderSheet->setCellValue('E' . $row, $order->customer->name);
+                $orderSheet->setCellValue('E' . $row, $order->customer->customer_name ?? ''); // ⭐ FIXED FIELD NAME
                 $orderSheet->setCellValue('F' . $row, $order->payment_terms);
                 $orderSheet->setCellValue('G' . $row, $order->delivery_terms);
                 $orderSheet->setCellValue('H' . $row, $order->expected_delivery ? $order->expected_delivery->format('Y-m-d') : '');
@@ -1142,15 +1362,16 @@ class SalesOrderController extends Controller
                 'H1' => 'Delivery Date',
                 'I1' => 'Discount',
                 'J1' => 'Subtotal',
-                'K1' => 'Tax',
-                'L1' => 'Total'
+                'K1' => 'Tax Rate (%)', // ⭐ ADDED TAX RATE
+                'L1' => 'Tax Amount', // ⭐ RENAMED FROM 'Tax'
+                'M1' => 'Total'
             ];
 
             foreach ($lineHeaders as $cell => $value) {
                 $linesSheet->setCellValue($cell, $value);
             }
 
-            $linesSheet->getStyle('A1:L1')->applyFromArray($headerStyle);
+            $linesSheet->getStyle('A1:M1')->applyFromArray($headerStyle);
 
             $row = 2;
             foreach ($salesOrders as $order) {
@@ -1158,21 +1379,22 @@ class SalesOrderController extends Controller
                     $linesSheet->setCellValue('A' . $row, $order->so_number);
                     $linesSheet->setCellValue('B' . $row, $order->po_number_customer ?? '');
                     $linesSheet->setCellValue('C' . $row, $line->item->item_code);
-                    $linesSheet->setCellValue('D' . $row, $line->item->name);
+                    $linesSheet->setCellValue('D' . $row, $line->item->item_name ?? ''); // ⭐ FIXED FIELD NAME
                     $linesSheet->setCellValue('E' . $row, $line->quantity);
-                    $linesSheet->setCellValue('F' . $row, $line->unitOfMeasure->symbol);
+                    $linesSheet->setCellValue('F' . $row, $line->unitOfMeasure->uom_code ?? ''); // ⭐ FIXED FIELD NAME
                     $linesSheet->setCellValue('G' . $row, $line->unit_price);
                     $linesSheet->setCellValue('H' . $row, $line->delivery_date ? \Carbon\Carbon::parse($line->delivery_date)->format('Y-m-d') : '');
                     $linesSheet->setCellValue('I' . $row, $line->discount);
                     $linesSheet->setCellValue('J' . $row, $line->subtotal);
-                    $linesSheet->setCellValue('K' . $row, $line->tax);
-                    $linesSheet->setCellValue('L' . $row, $line->total);
+                    $linesSheet->setCellValue('K' . $row, $line->tax_rate ?? 0); // ⭐ ADDED TAX RATE
+                    $linesSheet->setCellValue('L' . $row, $line->tax);
+                    $linesSheet->setCellValue('M' . $row, $line->total);
                     $row++;
                 }
             }
 
             // Auto-size columns
-            foreach (range('A', 'L') as $column) {
+            foreach (range('A', 'M') as $column) {
                 $linesSheet->getColumnDimension($column)->setAutoSize(true);
             }
 
@@ -1252,6 +1474,7 @@ class SalesOrderController extends Controller
             $statistics = [
                 'total_orders' => $query->count(),
                 'total_amount' => $query->sum('total_amount'),
+                'total_tax_amount' => $query->sum('tax_amount'), // ⭐ ADDED TAX STATISTICS
                 'by_status' => $query->groupBy('status')
                     ->selectRaw('status, count(*) as count, sum(total_amount) as total')
                     ->get(),

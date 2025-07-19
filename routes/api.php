@@ -324,7 +324,28 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/excel/template', [SalesOrderController::class, 'downloadTemplate']);
         Route::post('/excel/import', [SalesOrderController::class, 'importFromExcel']);
         Route::get('/excel/export', [SalesOrderController::class, 'exportToExcel']);
+        // Tax Calculation Features
+        Route::post('/preview-tax', [SalesOrderController::class, 'previewTaxCalculation']); // Preview tax before creating
+        Route::get('/applicable-taxes', [SalesOrderController::class, 'getApplicableTaxes']); // Get taxes for item+customer
     });
+
+    // Tax Configuration Routes
+    Route::group(['prefix' => 'taxes'], function () {
+        // Tax Groups and Taxes
+        Route::get('/groups', [TaxController::class, 'getTaxGroups']); // Get tax groups with taxes
+        Route::get('/', [TaxController::class, 'getTaxes']); // Get all taxes (with type filter)
+        Route::post('/', [TaxController::class, 'createTax']); // Create new tax
+        
+        // Tax Assignment
+        Route::post('/assign-item', [TaxController::class, 'assignItemTaxes']); // Assign taxes to item
+        Route::post('/assign-customer', [TaxController::class, 'assignCustomerTaxes']); // Assign default taxes to customer
+        Route::post('/assign-vendor', [TaxController::class, 'assignVendorTaxes']); // Assign default taxes to vendor
+        
+        // Tax Information
+        Route::get('/item/{itemId}', [TaxController::class, 'getItemTaxes']); // Get item tax configuration
+        Route::get('/customer/{customerId}', [TaxController::class, 'getCustomerTaxes']); // Get customer default taxes
+    });
+
 
     Route::prefix('deliveries')->group(function () {
         Route::get('/', [DeliveryController::class, 'index']);

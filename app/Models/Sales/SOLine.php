@@ -1,4 +1,5 @@
 <?php
+// app/Models/Sales/SOLine.php (Updated with new tax fields)
 
 namespace App\Models\Sales;
 
@@ -24,8 +25,17 @@ class SOLine extends Model
         'delivery_date',
         'discount',
         'tax',
+        'tax_rate',
+        'applied_taxes',
+        'subtotal_before_tax',
+        'tax_inclusive_amount',
         'subtotal',
         'total',
+        'base_currency_unit_price',
+        'base_currency_subtotal',
+        'base_currency_discount',
+        'base_currency_tax',
+        'base_currency_total',
         'notes'
     ];
 
@@ -34,8 +44,17 @@ class SOLine extends Model
         'quantity' => 'decimal:4',
         'discount' => 'decimal:5',
         'tax' => 'decimal:5',
+        'tax_rate' => 'decimal:4',
+        'applied_taxes' => 'array', // JSON field for tax breakdown
+        'subtotal_before_tax' => 'decimal:5',
+        'tax_inclusive_amount' => 'decimal:5',
         'subtotal' => 'decimal:5',
         'total' => 'decimal:5',
+        'base_currency_unit_price' => 'decimal:5',
+        'base_currency_subtotal' => 'decimal:5',
+        'base_currency_discount' => 'decimal:5',
+        'base_currency_tax' => 'decimal:5',
+        'base_currency_total' => 'decimal:5',
         'delivery_date' => 'date',
         'created_at' => 'datetime',
         'updated_at' => 'datetime'
@@ -95,86 +114,89 @@ class SOLine extends Model
      */
     public function getDeliveryStatusAttribute()
     {
-        $deliveredQuantity = $this->deliveryLines()->sum('quantity');
-
-        if ($deliveredQuantity == 0) {
-            return 'Not Delivered';
-        } elseif ($deliveredQuantity >= $this->quantity) {
+        $remaining = $this->remaining_quantity;
+        
+        if ($remaining <= 0) {
             return 'Fully Delivered';
-        } else {
+        } elseif ($remaining < $this->quantity) {
             return 'Partially Delivered';
+        } else {
+            return 'Not Delivered';
         }
     }
 
     /**
-     * Check if delivery date has passed
+     * Get tax breakdown from applied_taxes JSON
      */
-    public function getIsOverdueAttribute()
+    public function getTaxBreakdownAttribute()
     {
-        if (!$this->delivery_date) {
+        return $this->applied_taxes ?? [];
+    }
+
+    /**
+     * Get effective tax rate (handles both percentage and combined rates)
+     */
+    public function getEffectiveTaxRateAttribute()
+    {
+        if ($this->subtotal_before_tax > 0) {
+            return ($this->tax / $this->subtotal_before_tax) * 100;
+        }
+        return $this->tax_rate;
+    }
+
+    /**
+     * Check if this line has tax-inclusive pricing
+     */
+    public function getHasInclusiveTaxAttribute()
+    {
+        $taxBreakdown = $this->tax_breakdown;
+        if (empty($taxBreakdown)) {
             return false;
         }
 
-        return $this->delivery_date->isPast() && !$this->is_fully_delivered;
-    }
-
-    /**
-     * Get days until delivery or days overdue
-     */
-    public function getDaysToDeliveryAttribute()
-    {
-        if (!$this->delivery_date) {
-            return null;
+        foreach ($taxBreakdown as $tax) {
+            if (isset($tax['included_in_price']) && $tax['included_in_price']) {
+                return true;
+            }
         }
-
-        return now()->diffInDays($this->delivery_date, false);
+        return false;
     }
 
     /**
-     * Scope for lines that are overdue
+     * Get unit price excluding tax
      */
-    public function scopeOverdue($query)
+    public function getUnitPriceExcludingTaxAttribute()
     {
-        return $query->whereNotNull('delivery_date')
-            ->where('delivery_date', '<', now())
-            ->whereHas('deliveryLines', function ($q) {
-                $q->havingRaw('SUM(quantity) < ?', [$this->quantity]);
-            }, '<', 1);
+        if ($this->has_inclusive_tax && $this->quantity > 0) {
+            return $this->subtotal_before_tax / $this->quantity;
+        }
+        return $this->unit_price;
     }
 
     /**
-     * Scope for lines due today
+     * Calculate line total with current values
      */
-    public function scopeDueToday($query)
+    public function calculateTotal()
     {
-        return $query->whereDate('delivery_date', today());
+        $subtotal = $this->unit_price * $this->quantity;
+        return $subtotal - $this->discount + $this->tax;
     }
 
     /**
-     * Scope for lines due this week
+     * Recalculate all amounts based on current price and quantity
      */
-    public function scopeDueThisWeek($query)
+    public function recalculateAmounts($exchangeRate = 1.0)
     {
-        return $query->whereBetween('delivery_date', [
-            now()->startOfWeek(),
-            now()->endOfWeek()
-        ]);
-    }
-
-    /**
-     * Boot method to add model events
-     */
-    protected static function boot()
-    {
-        parent::boot();
-
-        // Auto-calculate subtotal and total when saving
-        static::saving(function ($soline) {
-            // Calculate subtotal
-            $soline->subtotal = $soline->unit_price * $soline->quantity;
-
-            // Calculate total (subtotal - discount + tax)
-            $soline->total = $soline->subtotal - ($soline->discount ?? 0) + ($soline->tax ?? 0);
-        });
+        $this->subtotal = $this->unit_price * $this->quantity;
+        $this->total = $this->subtotal - $this->discount + $this->tax;
+        
+        // Base currency calculations
+        $this->base_currency_unit_price = $this->unit_price * $exchangeRate;
+        $this->base_currency_subtotal = $this->subtotal * $exchangeRate;
+        $this->base_currency_discount = $this->discount * $exchangeRate;
+        $this->base_currency_tax = $this->tax * $exchangeRate;
+        $this->base_currency_total = $this->total * $exchangeRate;
+        
+        return $this;
     }
 }

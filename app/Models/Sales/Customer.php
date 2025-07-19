@@ -5,6 +5,8 @@ namespace App\Models\Sales;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use App\Models\Tax\Tax;
 use App\Models\Sales\SalesQuotation;
 use App\Models\Sales\SalesOrder;
 use App\Models\Sales\Delivery;
@@ -97,5 +99,47 @@ class Customer extends Model
     public function receivables(): HasMany
     {
         return $this->hasMany(CustomerReceivable::class, 'customer_id');
+    }
+    /**
+     * Get default taxes for this customer
+     */
+    public function taxes(): BelongsToMany
+    {
+        return $this->belongsToMany(Tax::class, 'customer_taxes', 'customer_id', 'tax_id')
+                    ->where('is_active', true)
+                    ->whereIn('tax_type', ['sales', 'both'])
+                    ->orderBy('sequence');
+    }
+
+    /**
+     * Add default tax to customer
+     */
+    public function addTax($taxId)
+    {
+        return $this->taxes()->attach($taxId);
+    }
+
+    /**
+     * Remove tax from customer
+     */
+    public function removeTax($taxId)
+    {
+        return $this->taxes()->detach($taxId);
+    }
+
+    /**
+     * Get combined default tax rate for this customer
+     */
+    public function getDefaultTaxRateAttribute()
+    {
+        return $this->taxes->sum('rate');
+    }
+
+    /**
+     * Check if customer has any default inclusive taxes
+     */
+    public function hasInclusiveTaxes()
+    {
+        return $this->taxes->where('included_in_price', true)->isNotEmpty();
     }
 }

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use App\Models\UnitOfMeasure;
 use App\Models\ItemCategory;
 use App\Models\CurrencyRate;
@@ -13,6 +14,7 @@ use App\Models\StockTransaction;
 use App\Models\ItemStock;
 use App\Models\Manufacturing\BOM;
 use App\Models\Manufacturing\Routing;
+use App\Models\Tax\Tax;
 
 class Item extends Model
 {
@@ -831,7 +833,93 @@ class Item extends Model
 
         return true;
     }
+    /**
+     * Get sales taxes for this item
+     */
+    public function salesTaxes(): BelongsToMany
+    {
+        return $this->belongsToMany(Tax::class, 'item_taxes', 'item_id', 'tax_id')
+                    ->wherePivot('tax_type', 'sales')
+                    ->where('is_active', true)
+                    ->orderBy('sequence');
+    }
 
+    /**
+     * Get purchase taxes for this item
+     */
+    public function purchaseTaxes(): BelongsToMany
+    {
+        return $this->belongsToMany(Tax::class, 'item_taxes', 'item_id', 'tax_id')
+                    ->wherePivot('tax_type', 'purchase')
+                    ->where('is_active', true)
+                    ->orderBy('sequence');
+    }
+
+    /**
+     * Get all taxes for this item
+     */
+    public function taxes(): BelongsToMany
+    {
+        return $this->belongsToMany(Tax::class, 'item_taxes', 'item_id', 'tax_id')
+                    ->withPivot('tax_type')
+                    ->where('is_active', true)
+                    ->orderBy('sequence');
+    }
+
+    /**
+     * Add sales tax to item
+     */
+    public function addSalesTax($taxId)
+    {
+        return $this->taxes()->attach($taxId, ['tax_type' => 'sales']);
+    }
+
+    /**
+     * Add purchase tax to item
+     */
+    public function addPurchaseTax($taxId)
+    {
+        return $this->taxes()->attach($taxId, ['tax_type' => 'purchase']);
+    }
+
+    /**
+     * Remove tax from item
+     */
+    public function removeTax($taxId, $taxType = null)
+    {
+        $query = $this->taxes();
+        
+        if ($taxType) {
+            $query->wherePivot('tax_type', $taxType);
+        }
+        
+        return $query->detach($taxId);
+    }
+
+    /**
+     * Get default tax rate for sales (combined rate)
+     */
+    public function getDefaultSalesTaxRateAttribute()
+    {
+        return $this->salesTaxes->sum('rate');
+    }
+
+    /**
+     * Get default tax rate for purchases (combined rate)
+     */
+    public function getDefaultPurchaseTaxRateAttribute()
+    {
+        return $this->purchaseTaxes->sum('rate');
+    }
+
+    /**
+     * Check if item has any inclusive taxes
+     */
+    public function hasInclusiveTaxes($type = 'sales')
+    {
+        $taxes = $type === 'sales' ? $this->salesTaxes : $this->purchaseTaxes;
+        return $taxes->where('included_in_price', true)->isNotEmpty();
+    }
     /**
      * Set new quantity (with auto Item.current_stock update)
      *
